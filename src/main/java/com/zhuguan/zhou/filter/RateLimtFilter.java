@@ -1,5 +1,6 @@
 package com.zhuguan.zhou.filter;
 
+import com.google.common.util.concurrent.RateLimiter;
 import com.netflix.zuul.ZuulFilter;
 import com.netflix.zuul.context.RequestContext;
 import com.netflix.zuul.exception.ZuulException;
@@ -9,57 +10,52 @@ import org.slf4j.LoggerFactory;
 import org.springframework.cloud.netflix.zuul.filters.support.FilterConstants;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
+
 import javax.servlet.http.HttpServletRequest;
 
+/**
+ * 限流接口的实战防止服务被宕机
+ */
 @Component
-public class LoginFilter extends ZuulFilter {
-
-    private final Logger logger = LoggerFactory.getLogger(this.getClass());
+public class RateLimtFilter extends ZuulFilter {
+    Logger logger = LoggerFactory.getLogger(this.getClass());
 
     /**
-     * 过滤去的类型有前置 后置，错误
-     * @return
+     * 创建1000个令牌意思是最多同时只能有1000个用户访问这是网关限流
+     * nginx也是能做限流的
      */
+    private static final RateLimiter rete = RateLimiter.create(1000);
+
     @Override
     public String filterType() {
         return FilterConstants.PRE_TYPE;
     }
-
     /**
-     * 执行的顺序值越小越先执行
+     * 在最前的地方进行限流越小越先执行
      * @return
      */
     @Override
     public int filterOrder() {
-        return 4;
+        return -5;
     }
 
-    /**
-     * 是否进行拦截 返回false就是不需要拦截
-     * true 就是拦截进入下面的run方法里面
-     * @return
-     */
     @Override
     public boolean shouldFilter() {
-        //RequestContext是网关里面的对象注意引入包的位置
         RequestContext context = RequestContext.getCurrentContext();
         HttpServletRequest request = context.getRequest();
-        String URL = request.getRequestURL().toString();
-        String uri = request.getRequestURI();
-        logger.info("======url：" + URL);
-        logger.info("======uri：" + uri);
-        if ("/api/product/product/getProductDtoByName".equals(uri)) return true;
+        String token = request.getHeader("token");
+        if (!StringUtils.isBlank(token)) return true;//表示需要拦截
         return false;
     }
 
     @Override
     public Object run() throws ZuulException {
-        logger.info("==========开始拦截了============");
+        logger.info("需要拦截的接口。。。");
         RequestContext context = RequestContext.getCurrentContext();
-        HttpServletRequest request = context.getRequest();
-        String token = request.getHeader("token");
-        if (StringUtils.isBlank(token)) {
-            context.setSendZuulResponse(false);//设置不能继续往后面执行
+        boolean tryAcquire = rete.tryAcquire();//获得令牌如果1000都被拿走就会返回fasle
+        if (!tryAcquire) {//如果不能获得令牌的话就直接返回这样能保护服务
+            HttpServletRequest request = context.getRequest();
+            context.setSendZuulResponse(false);
             context.setResponseStatusCode(HttpStatus.UNAUTHORIZED.value());
         }
         return null;
